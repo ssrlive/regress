@@ -414,6 +414,9 @@ where
     /// Named capture group references.
     named_group_indices: HashMap<CaptureGroupName, u32>,
 
+    /// All indices for each named capture group (for duplicate named groups).
+    named_group_all_indices: HashMap<CaptureGroupName, Vec<u32>>,
+
     /// Whether a lookbehind was encountered.
     has_lookbehind: bool,
 }
@@ -1698,7 +1701,23 @@ where
 
                 // The sequence `\k` must be the start of a backreference to a named capture group.
                 if let Some(group_name) = self.try_consume_named_capture_group_name() {
-                    if let Some(index) = self.named_group_indices.get(&group_name) {
+                    // Check if there are multiple groups with this name (duplicate named groups)
+                    if let Some(all_indices) = self.named_group_all_indices.get(&group_name) {
+                        if all_indices.len() > 1 {
+                            // Multiple groups with this name - emit NamedBackRef
+                            let groups: Vec<u32> = all_indices.iter().map(|i| i + 1).collect();
+                            Ok(ir::Node::NamedBackRef {
+                                groups,
+                                icase: self.flags.icase,
+                            })
+                        } else {
+                            // Single group - use regular BackRef
+                            Ok(ir::Node::BackRef {
+                                group: all_indices[0] + 1,
+                                icase: self.flags.icase,
+                            })
+                        }
+                    } else if let Some(index) = self.named_group_indices.get(&group_name) {
                         Ok(ir::Node::BackRef {
                             group: *index + 1,
                             icase: self.flags.icase,
@@ -1933,35 +1952,50 @@ where
                     }
                 },
                 Some('(') => {
-                    if self.try_consume_str("?")
-                        && let Some(name) = self.try_consume_named_capture_group_name()
-                    {
-                        // Build current alternative path from depth 0 to current depth
-                        let mut segments = Vec::new();
-                        for d in 0..=paren_depth {
-                            segments.push((d, *alt_indices.get(&d).unwrap_or(&0)));
+                    let mut is_capturing = true;
+
+                    if self.try_consume_str("?") {
+                        if let Some(name) = self.try_consume_named_capture_group_name() {
+                            // Named capturing group
+                            // Build current alternative path from depth 0 to current depth
+                            let mut segments = Vec::new();
+                            for d in 0..=paren_depth {
+                                segments.push((d, *alt_indices.get(&d).unwrap_or(&0)));
+                            }
+                            let current_path = AlternativePath { segments };
+
+                            // Record this location
+                            named_group_locations
+                                .entry(name.clone())
+                                .or_default()
+                                .push(current_path);
+
+                            // Store in named_group_indices (use the first occurrence's index)
+                            self.named_group_indices
+                                .entry(name.clone())
+                                .or_insert(self.group_count_max);
+
+                            // Store ALL indices for this name (for NamedBackRef)
+                            self.named_group_all_indices
+                                .entry(name)
+                                .or_default()
+                                .push(self.group_count_max);
+                        } else {
+                            // Non-capturing group (?:), lookahead (?=), (?!), etc.
+                            is_capturing = false;
                         }
-                        let current_path = AlternativePath { segments };
-
-                        // Record this location
-                        named_group_locations
-                            .entry(name.clone())
-                            .or_default()
-                            .push(current_path);
-
-                        // Store in named_group_indices (use the first occurrence's index)
-                        self.named_group_indices
-                            .entry(name)
-                            .or_insert(self.group_count_max);
                     }
 
-                    self.group_count_max = if self.group_count_max + 1 > MAX_CAPTURE_GROUPS as u32 {
-                        MAX_CAPTURE_GROUPS as u32
-                    } else {
-                        self.group_count_max + 1
-                    };
+                    if is_capturing {
+                        self.group_count_max =
+                            if self.group_count_max + 1 > MAX_CAPTURE_GROUPS as u32 {
+                                MAX_CAPTURE_GROUPS as u32
+                            } else {
+                                self.group_count_max + 1
+                            };
+                    }
 
-                    // Entering a new group
+                    // Entering a new group (track nesting for ALL groups)
                     paren_depth += 1;
                     alt_indices.insert(paren_depth, 0);
                 }
@@ -2070,6 +2104,7 @@ where
         loop_count: 0,
         group_count: 0,
         named_group_indices: HashMap::new(),
+        named_group_all_indices: HashMap::new(),
         group_count_max: 0,
         has_lookbehind: false,
     };

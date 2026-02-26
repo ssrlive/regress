@@ -105,6 +105,13 @@ pub enum Insn {
         icase: bool,
     },
 
+    /// Perform a named backreference match against multiple possible groups.
+    /// Used for duplicate named capturing groups.
+    NamedBackRef {
+        groups: Box<[u32]>,
+        icase: bool,
+    },
+
     /// Match the next character against the bracket contents, stored at the given index in the CompiledRegex.
     Bracket(usize),
 

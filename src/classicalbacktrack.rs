@@ -895,6 +895,30 @@ impl<'a, Input: InputIndexer> MatchAttempter<'a, Input> {
                         next_or_bt!(matched)
                     }
 
+                    &Insn::NamedBackRef { ref groups, icase } => {
+                        // For duplicate named groups: find the first group that participated
+                        let mut participated_range = None;
+                        for &cg_idx in groups.iter() {
+                            let cg = self.s.groups.mat(cg_idx as usize);
+                            if let Some(range) = cg.as_range() {
+                                participated_range = Some(range);
+                                break;
+                            }
+                        }
+                        let matched;
+                        if let Some(orig_range) = participated_range {
+                            if icase {
+                                matched = matchers::backref_icase(input, dir, orig_range, &mut pos);
+                            } else {
+                                matched = matchers::backref(input, dir, orig_range, &mut pos);
+                            }
+                        } else {
+                            // No group participated, match succeeds (empty match)
+                            matched = true;
+                        }
+                        next_or_bt!(matched)
+                    }
+
                     &Insn::Lookahead {
                         negate,
                         start_group,

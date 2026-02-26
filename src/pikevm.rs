@@ -241,6 +241,30 @@ fn try_match_state<Input: InputIndexer, Dir: Direction>(
             nextinsn_or_fail!(matched)
         }
 
+        &Insn::NamedBackRef { ref groups, icase } => {
+            // For duplicate named groups: find the first group that participated
+            let mut participated_range = None;
+            for &cg_idx in groups.iter() {
+                let group = &s.groups[cg_idx as usize];
+                if let Some(range) = group.as_range() {
+                    participated_range = Some(range);
+                    break;
+                }
+            }
+            let matched;
+            if let Some(orig_range) = participated_range {
+                if icase {
+                    matched = matchers::backref_icase(input, dir, orig_range, &mut s.pos);
+                } else {
+                    matched = matchers::backref(input, dir, orig_range, &mut s.pos)
+                }
+            } else {
+                // No group participated, match succeeds (empty match)
+                matched = true;
+            }
+            nextinsn_or_fail!(matched)
+        }
+
         &Insn::Lookahead {
             negate,
             start_group: _,

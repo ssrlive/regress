@@ -312,6 +312,19 @@ impl Emitter {
                             icase,
                         })
                     }
+                    Node::NamedBackRef { groups, icase } => {
+                        let adjusted: Vec<u32> = groups
+                            .iter()
+                            .map(|g| {
+                                debug_assert!(*g >= 1, "Group should not be zero");
+                                g - 1
+                            })
+                            .collect();
+                        self.emit_insn(Insn::NamedBackRef {
+                            groups: adjusted.into_boxed_slice(),
+                            icase: *icase,
+                        })
+                    }
 
                     Node::ByteSet(bytes) => self.emit_insn(self.make_byte_set_insn(bytes)),
 
