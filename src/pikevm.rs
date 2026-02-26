@@ -8,7 +8,7 @@ use crate::exec;
 use crate::indexing::{AsciiInput, ElementType, InputIndexer, Utf8Input};
 use crate::insn::{CompiledRegex, Insn, LoopFields, StartPredicate};
 use crate::matchers;
-use crate::matchers::CharProperties;
+use crate::matchers::{CharProperties, is_icase_word_char};
 use crate::position::PositionType;
 use crate::scm;
 use crate::scm::SingleCharMatcher;
@@ -221,11 +221,14 @@ fn try_match_state<Input: InputIndexer, Dir: Direction>(
             nextinsn_or_fail!(true)
         }
 
-        &Insn::BackRef(group_idx) => {
+        &Insn::BackRef {
+            group: group_idx,
+            icase,
+        } => {
             let matched;
             let group = &mut s.groups[group_idx as usize];
             if let Some(orig_range) = group.as_range() {
-                if re.flags.icase {
+                if icase {
                     matched = matchers::backref_icase(input, dir, orig_range, &mut s.pos);
                 } else {
                     matched = matchers::backref(input, dir, orig_range, &mut s.pos)
@@ -305,13 +308,29 @@ fn try_match_state<Input: InputIndexer, Dir: Direction>(
             nextinsn_or_fail!(scm::MatchByteArraySet(bytes).matches(input, dir, &mut s.pos))
         }
 
-        &Insn::WordBoundary { invert } => {
-            let prev_wordchar = input
-                .peek_left(s.pos)
-                .is_some_and(Input::CharProps::is_word_char);
-            let curr_wordchar = input
-                .peek_right(s.pos)
-                .is_some_and(Input::CharProps::is_word_char);
+        &Insn::WordBoundary {
+            invert,
+            icase,
+            unicode,
+        } => {
+            let prev_wordchar = if icase && unicode {
+                input
+                    .peek_left(s.pos)
+                    .is_some_and(|c| is_icase_word_char(c.as_u32()))
+            } else {
+                input
+                    .peek_left(s.pos)
+                    .is_some_and(Input::CharProps::is_word_char)
+            };
+            let curr_wordchar = if icase && unicode {
+                input
+                    .peek_right(s.pos)
+                    .is_some_and(|c| is_icase_word_char(c.as_u32()))
+            } else {
+                input
+                    .peek_right(s.pos)
+                    .is_some_and(Input::CharProps::is_word_char)
+            };
             let is_boundary = prev_wordchar != curr_wordchar;
             nextinsn_or_fail!(is_boundary != invert)
         }

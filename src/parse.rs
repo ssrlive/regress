@@ -541,12 +541,20 @@ where
                         // Term :: Assertion :: \b
                         'b' => {
                             self.consume('b');
-                            result.push(ir::Node::WordBoundary { invert: false });
+                            result.push(ir::Node::WordBoundary {
+                                invert: false,
+                                icase: self.flags.icase,
+                                unicode: self.flags.unicode || self.flags.unicode_sets,
+                            });
                         }
                         // Term :: Assertion :: \B
                         'B' => {
                             self.consume('B');
-                            result.push(ir::Node::WordBoundary { invert: true });
+                            result.push(ir::Node::WordBoundary {
+                                invert: true,
+                                icase: self.flags.icase,
+                                unicode: self.flags.unicode || self.flags.unicode_sets,
+                            });
                         }
                         // Term :: Atom :: \ AtomEscape :: CharacterEscape :: c AsciiLetter
                         // Term :: ExtendedAtom :: \ [lookahead = c]
@@ -1587,10 +1595,22 @@ where
 
             'w' | 'W' => {
                 self.consume(c);
-                Ok(make_bracket_class(
-                    CharacterClassType::Words,
-                    c == 'w' as u32,
-                ))
+                let positive = c == 'w' as u32;
+                // In unicode+icase mode, expand the POSITIVE word char set
+                // with case-folded variants, then use invert for \W.
+                // This is necessary because make_bracket_class pre-inverts cps
+                // for negative classes, which would cause add_icase_code_points
+                // to expand the wrong set.
+                if self.flags.icase && (self.flags.unicode || self.flags.unicode_sets) {
+                    let mut cps = codepoints_from_class(CharacterClassType::Words, true);
+                    cps = unicode::add_icase_code_points(cps);
+                    Ok(ir::Node::Bracket(BracketContents {
+                        invert: !positive,
+                        cps,
+                    }))
+                } else {
+                    Ok(make_bracket_class(CharacterClassType::Words, positive))
+                }
             }
 
             // ClassEscape :: CharacterClassEscape :: [+UnicodeMode] p{ UnicodePropertyValueExpression }
@@ -1601,9 +1621,20 @@ where
                 let property_escape = self.try_consume_unicode_property_escape()?;
                 match property_escape {
                     PropertyEscapeKind::CharacterClass(s) => {
+                        let mut cps = CodePointSet::from_sorted_disjoint_intervals(s.to_vec());
+                        if self.flags.icase {
+                            if negate {
+                                // CharacterComplement semantics (ES2025): for \P{prop}
+                                // with icase, compute the non-matching set N and invert.
+                                cps = unicode::compute_icase_complement_nonmatching(&cps);
+                            } else {
+                                // For \p{prop} with icase, expand with case-folded variants
+                                cps = unicode::add_icase_code_points(cps);
+                            }
+                        }
                         Ok(ir::Node::Bracket(BracketContents {
                             invert: negate,
-                            cps: CodePointSet::from_sorted_disjoint_intervals(s.to_vec()),
+                            cps,
                         }))
                     }
                     PropertyEscapeKind::StringSet(_) if negate => error("Invalid character escape"),
@@ -1630,7 +1661,10 @@ where
             '1'..='9' if self.flags.unicode => {
                 let group = self.try_consume_decimal_integer_literal().unwrap();
                 if group <= self.group_count_max as usize {
-                    Ok(ir::Node::BackRef(group as u32))
+                    Ok(ir::Node::BackRef {
+                        group: group as u32,
+                        icase: self.flags.icase,
+                    })
                 } else {
                     error("Invalid character escape")
                 }
@@ -1644,7 +1678,10 @@ where
                 let group = self.try_consume_decimal_integer_literal().unwrap();
 
                 if group <= self.group_count_max as usize {
-                    Ok(ir::Node::BackRef(group as u32))
+                    Ok(ir::Node::BackRef {
+                        group: group as u32,
+                        icase: self.flags.icase,
+                    })
                 } else {
                     self.input = input;
                     let c = self.consume_character_escape()?;
@@ -1662,7 +1699,10 @@ where
                 // The sequence `\k` must be the start of a backreference to a named capture group.
                 if let Some(group_name) = self.try_consume_named_capture_group_name() {
                     if let Some(index) = self.named_group_indices.get(&group_name) {
-                        Ok(ir::Node::BackRef(*index + 1))
+                        Ok(ir::Node::BackRef {
+                            group: *index + 1,
+                            icase: self.flags.icase,
+                        })
                     } else {
                         error(format!(
                             "Backreference to invalid named capture group: {}",

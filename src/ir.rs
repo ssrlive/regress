@@ -70,7 +70,11 @@ pub enum Node {
     },
 
     /// Word boundary (\b or \B).
-    WordBoundary { invert: bool },
+    WordBoundary {
+        invert: bool,
+        icase: bool,
+        unicode: bool,
+    },
 
     /// A capturing group.
     CaptureGroup(Box<Node>, CaptureGroupID),
@@ -79,7 +83,7 @@ pub enum Node {
     NamedCaptureGroup(Box<Node>, CaptureGroupID, CaptureGroupName),
 
     /// A backreference.
-    BackRef(u32),
+    BackRef { group: u32, icase: bool },
 
     /// A bracket.
     Bracket(BracketContents),
@@ -223,8 +227,16 @@ impl Node {
             Node::CaptureGroup(..) | Node::NamedCaptureGroup(..) => {
                 panic!("Refusing to duplicate a capture group");
             }
-            &Node::WordBoundary { invert } => Node::WordBoundary { invert },
-            &Node::BackRef(idx) => Node::BackRef(idx),
+            &Node::WordBoundary {
+                invert,
+                icase,
+                unicode,
+            } => Node::WordBoundary {
+                invert,
+                icase,
+                unicode,
+            },
+            &Node::BackRef { group, icase } => Node::BackRef { group, icase },
             Node::Bracket(bc) => Node::Bracket(bc.clone()),
             // Do not reverse into lookarounds, they already have the right sense.
             Node::LookaroundAssertion {
@@ -537,11 +549,11 @@ fn display_node(node: &Node, depth: usize, f: &mut fmt::Formatter) -> fmt::Resul
         Node::NamedCaptureGroup(_node, _, name) => {
             writeln!(f, "NamedCaptureGroup {:?}", name)?;
         }
-        &Node::WordBoundary { invert } => {
+        &Node::WordBoundary { invert, .. } => {
             let kind = if invert { "\\B" } else { "\\b" };
             writeln!(f, "WordBoundary {:?} ", kind)?;
         }
-        &Node::BackRef(group) => {
+        &Node::BackRef { group, .. } => {
             writeln!(f, "BackRef {:?} ", group)?;
         }
         Node::Bracket(contents) => {
